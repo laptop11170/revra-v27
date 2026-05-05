@@ -40,7 +40,7 @@ interface ShellProps {
 }
 
 const userNav: NavItem[] = [
-  { label: "Home", href: "/user", icon: <Home size={17} /> },
+  { label: "Home", href: "/", icon: <Home size={17} /> },
   { label: "Conversations", href: "/user/conversations", icon: <MessageSquare size={17} /> },
   { label: "Leads", href: "/user/pipeline", icon: <Target size={17} /> },
   { label: "Campaigns", href: "/user/campaigns", icon: <Megaphone size={17} /> },
@@ -111,7 +111,7 @@ export function Shell({ children, role }: ShellProps) {
         {/* Nav */}
         <nav className="sidebar-nav">
           {nav.map((item) => {
-            const isActive = pathname === item.href || (item.href !== "/user" && item.href !== "/admin" && item.href !== "/superadmin" && pathname.startsWith(item.href));
+            const isActive = pathname === item.href || (item.href !== "/" && item.href !== "/admin" && item.href !== "/superadmin" && pathname.startsWith(item.href));
             return (
               <Link
                 key={item.href}

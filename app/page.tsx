@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+import { UserDashboard } from "@/components/layouts/UserDashboard";
 
 export default async function Home() {
   const { userId } = await auth();
@@ -9,22 +10,21 @@ export default async function Home() {
     redirect("/sign-in");
   }
 
-  // Check if user has a workspace
   const supabase = createServiceSupabaseClient();
-  if (supabase) {
-    const { data: user } = await supabase
-      .from("users")
-      .select("workspace_id, role")
-      .eq("clerk_user_id", userId)
-      .single();
-
-    if (user?.workspace_id) {
-      // User already has workspace — go directly to dashboard
-      redirect("/user");
-    }
-    // No workspace — this shouldn't happen since webhook auto-creates,
-    // but redirect to sign-in just in case
+  if (!supabase) {
+    redirect("/sign-in");
   }
 
-  redirect("/sign-in");
+  const { data: user } = await supabase
+    .from("users")
+    .select("workspace_id, role")
+    .eq("clerk_user_id", userId)
+    .single();
+
+  if (!user?.workspace_id) {
+    redirect("/select-workspace");
+  }
+
+  // Render dashboard directly at "/"
+  return <UserDashboard />;
 }
