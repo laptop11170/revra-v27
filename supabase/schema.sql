@@ -144,6 +144,8 @@ CREATE TABLE IF NOT EXISTS leads (
   notes             TEXT,
   tags              TEXT[] DEFAULT '{}',
   enrichment_data   JSONB,
+  is_admin_lead     BOOLEAN DEFAULT false,
+  is_marketplace_lead BOOLEAN DEFAULT false,
   calendar_event_id TEXT,
   created_at        TIMESTAMPTZ DEFAULT NOW(),
   updated_at        TIMESTAMPTZ DEFAULT NOW()
@@ -456,7 +458,7 @@ CREATE POLICY "Admins create leads" ON leads FOR INSERT
   WITH CHECK (
     workspace_id IN (
       SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
-      AND role IN ('admin', 'superadmin')
+      AND role IN ('admin', 'superadmin', 'agent')
     )
   );
 

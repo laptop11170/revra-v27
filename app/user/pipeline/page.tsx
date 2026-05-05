@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Shell } from "@/components/layouts/Shell";
 import { Button } from "@/components/ui/button";
-import { Filter, Plus, Building, ChevronDown, Sparkles, Loader2 } from "lucide-react";
+import { Filter, Plus, Building, ChevronDown, Sparkles, Loader2, LayoutGrid, List, UserCircle, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLeadProfile, LeadData } from "@/context/lead-profile-context";
 import { AddLeadModal } from "@/components/leads/AddLeadModal";
@@ -33,6 +33,8 @@ type ApiLead = {
   last_message_at: string | null;
   last_contacted_at: string | null;
   created_at: string;
+  is_admin_lead: boolean;
+  is_marketplace_lead: boolean;
 };
 
 type StageKey = "new_lead" | "contacted" | "qualified" | "quote_sent" | "won" | "lost";
@@ -80,6 +82,27 @@ function SparklineSVG() {
 }
 
 // ── Draggable Lead Card ─────────────────────────────────────────────────────
+function LeadBadge({ label, color }: { label: string; color: string }) {
+  return (
+    <span
+      style={{
+        padding: "1px 6px",
+        borderRadius: 999,
+        fontSize: 9.5,
+        fontWeight: 600,
+        letterSpacing: "0.03em",
+        textTransform: "uppercase",
+        background: color + "20",
+        color: color,
+        lineHeight: "16px",
+        flexShrink: 0,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 function DraggableCard({ lead, onOpen }: { lead: ApiLead; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: lead.id,
@@ -123,8 +146,12 @@ function DraggableCard({ lead, onOpen }: { lead: ApiLead; onOpen: () => void }) 
           {fullName.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {fullName}
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140 }}>
+              {fullName}
+            </span>
+            {lead.is_admin_lead && <LeadBadge label="Admin Lead" color="#7c6cff" />}
+            {lead.is_marketplace_lead && <LeadBadge label="Revra Lead" color="#06b6d4" />}
           </div>
           {lead.lead_type && (
             <div style={{ fontSize: 11.5, color: "var(--ink-mute)" }}>
@@ -259,6 +286,148 @@ function DroppableColumn({
   );
 }
 
+// ── List View ─────────────────────────────────────────────────────────────────
+function ListView({ leads, onOpenLead }: { leads: ApiLead[]; onOpenLead: (lead: ApiLead) => void }) {
+  const getHotLevel = (score: number): "hot" | "warm" | null => {
+    if (score >= 80) return "hot";
+    if (score >= 60) return "warm";
+    return null;
+  };
+
+  const stageLabel: Record<StageKey, string> = {
+    new_lead: "New Lead",
+    contacted: "Contacted",
+    qualified: "Qualified",
+    quote_sent: "Quote Sent",
+    won: "Won",
+    lost: "Lost",
+  };
+
+  const stageDotColor: Record<StageKey, string> = {
+    new_lead: "#a078ff",
+    contacted: "#00cbe6",
+    qualified: "#16a34a",
+    quote_sent: "#d97706",
+    won: "#22c55e",
+    lost: "#dc2626",
+  };
+
+  return (
+    <div style={{ borderRadius: "var(--radius-xl)", border: "1px solid var(--line)", overflow: "hidden" }}>
+      {/* Table header */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 80px 1fr 120px", gap: 0, padding: "10px 16px", background: "rgba(19,24,38,0.8)", borderBottom: "1px solid var(--line)" }}>
+        {["Name", "Phone", "Lead Type", "Source", "Score", "Stage", ""].map((h) => (
+          <div key={h} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-faint)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</div>
+        ))}
+      </div>
+
+      {/* Table rows */}
+      {leads.length === 0 ? (
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--ink-mute)", fontSize: 13 }}>
+          No leads yet
+        </div>
+      ) : (
+        leads.map((lead) => {
+          const hot = getHotLevel(lead.score);
+          const fullName = `${lead.first_name} ${lead.last_name || ""}`.trim();
+          const stage = lead.pipeline_stage as StageKey;
+          const stageColor = stageDotColor[stage] || "#888";
+
+          return (
+            <div
+              key={lead.id}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "2fr 1.5fr 1fr 1fr 80px 1fr 120px",
+                gap: 0,
+                padding: "12px 16px",
+                borderBottom: "1px solid rgba(37,43,63,0.4)",
+                alignItems: "center",
+                cursor: "pointer",
+                transition: "background 0.1s",
+              }}
+              onClick={() => onOpenLead(lead)}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              {/* Name */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <div style={{
+                  width: 30, height: 30, borderRadius: "var(--radius-md)",
+                  background: hot === "hot" ? "rgba(16,185,129,0.2)" : "var(--surface-3)",
+                  color: hot === "hot" ? "var(--mint)" : "var(--ink-mute)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 10, fontWeight: 600, flexShrink: 0,
+                }}>
+                  {fullName.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {fullName}
+                  </div>
+                  {lead.email && (
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {lead.email}
+                    </div>
+                  )}
+                </div>
+                {lead.is_admin_lead && <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 600, background: "#7c6cff20", color: "#7c6cff" }}>Admin Lead</span>}
+                {lead.is_marketplace_lead && <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 600, background: "#06b6d420", color: "#06b6d4" }}>Revra Lead</span>}
+              </div>
+
+              {/* Phone */}
+              <div style={{ fontSize: 12.5, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {lead.phone}
+              </div>
+
+              {/* Lead Type */}
+              <div style={{ fontSize: 12.5, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {lead.lead_type ? lead.lead_type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—"}
+              </div>
+
+              {/* Source */}
+              <div style={{ fontSize: 12.5, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {lead.source ? lead.source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—"}
+              </div>
+
+              {/* Score */}
+              <div style={{ fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
+                {lead.score > 0 && (
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+                    background: hot === "hot" ? "rgba(16,185,129,0.15)" : hot === "warm" ? "rgba(245,158,11,0.15)" : "var(--surface-2)",
+                    color: hot === "hot" ? "var(--mint)" : hot === "warm" ? "var(--amber)" : "var(--ink-mute)",
+                  }}>
+                    {lead.score}
+                  </span>
+                )}
+              </div>
+
+              {/* Stage */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: stageColor, display: "inline-block", flexShrink: 0 }} />
+                <span style={{ fontSize: 12.5, color: "var(--ink)" }}>{stageLabel[stage]}</span>
+              </div>
+
+              {/* View Profile button */}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  className="btn-ghost"
+                  style={{ padding: "5px 10px", fontSize: 11.5, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}
+                  onClick={(e) => { e.stopPropagation(); onOpenLead(lead); }}
+                >
+                  <UserCircle size={12} />
+                  View Profile
+                </button>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 // ── Main Page ───────────────────────────────────────────────────────────────
 export default function PipelinePage() {
   const { openLead } = useLeadProfile();
@@ -269,6 +438,7 @@ export default function PipelinePage() {
   const [addLeadOpen, setAddLeadOpen] = useState(false);
   const [addLeadStage, setAddLeadStage] = useState<StageKey>("new_lead");
   const [emmaNewCount, setEmmaNewCount] = useState(0);
+  const [viewMode, setViewMode] = useState<"kanban" | "list">("kanban");
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -420,6 +590,24 @@ export default function PipelinePage() {
             <button className="filter-btn">
               Stage <ChevronDown size={12} />
             </button>
+            <div style={{ display: "flex", gap: 2, background: "var(--surface-2)", padding: 3, borderRadius: "var(--radius-md)" }}>
+              <button
+                onClick={() => setViewMode("kanban")}
+                className={cn("btn-icon p-1.5", viewMode === "kanban" && "active")}
+                style={{ borderRadius: "var(--radius-sm)", background: viewMode === "kanban" ? "var(--surface)" : "transparent" }}
+                title="Kanban view"
+              >
+                <LayoutGrid size={13} />
+              </button>
+              <button
+                onClick={() => setViewMode("list")}
+                className={cn("btn-icon p-1.5", viewMode === "list" && "active")}
+                style={{ borderRadius: "var(--radius-sm)", background: viewMode === "list" ? "var(--surface)" : "transparent" }}
+                title="List view"
+              >
+                <List size={13} />
+              </button>
+            </div>
             <button
               className="btn-primary"
               style={{ padding: "8px 16px", fontSize: 13 }}
@@ -455,6 +643,8 @@ export default function PipelinePage() {
             <div style={{ fontSize: 13 }}>{error}</div>
             <button className="btn-ghost" style={{ marginTop: 8, padding: "6px 12px", fontSize: 12 }} onClick={fetchLeads}>Retry</button>
           </div>
+        ) : viewMode === "list" ? (
+          <ListView leads={leads} onOpenLead={handleOpenLead} />
         ) : (
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>

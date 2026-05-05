@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   if (stage) query = query.eq("pipeline_stage", stage);
   if (user.role === "agent") {
-    query = query.eq("assigned_agent_id", user.id);
+    // Agents see all leads in workspace (not just their own) so they can work any lead
   } else if (agentId) {
     query = query.eq("assigned_agent_id", agentId);
   }
@@ -63,11 +63,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (user.role === "agent") {
-    return NextResponse.json({ error: "Agents cannot create leads" }, { status: 403 });
+    // Agents can create leads — assigned to themselves, not flagged as admin leads
   }
 
   const body = await req.json();
-  const { first_name, last_name, phone, email, lead_type, source, assigned_agent_id } = body;
+  const {
+    first_name, last_name, phone, email,
+    lead_type, source, assigned_agent_id,
+    is_admin_lead, is_marketplace_lead,
+  } = body;
 
   if (!first_name || !phone) {
     return NextResponse.json({ error: "first_name and phone are required" }, { status: 400 });
@@ -75,9 +79,13 @@ export async function POST(req: NextRequest) {
 
   const { data: agentUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, role")
     .eq("clerk_user_id", userId)
     .single();
+
+  // Mark as admin lead only if an admin (not agent) is creating it on behalf of someone else
+  const isCreatedByAdmin = agentUser?.role === "admin" || agentUser?.role === "superadmin";
+  const wasAssignedToOther = assigned_agent_id && assigned_agent_id !== agentUser?.id;
 
   const { data, error } = await supabase
     .from("leads")
@@ -94,6 +102,8 @@ export async function POST(req: NextRequest) {
       score: 0,
       tags: [],
       previous_stages: [],
+      is_admin_lead: isCreatedByAdmin && wasAssignedToOther,
+      is_marketplace_lead: is_marketplace_lead || false,
     })
     .select()
     .single();
