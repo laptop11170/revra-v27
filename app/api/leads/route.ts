@@ -102,3 +102,57 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ lead: data }, { status: 201 });
 }
+
+export async function PATCH(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createServiceSupabaseClient();
+  if (!supabase) return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+
+  const { data: user } = await supabase
+    .from("users")
+    .select("id, workspace_id, role")
+    .eq("clerk_user_id", userId)
+    .single();
+
+  if (!user?.workspace_id) {
+    return NextResponse.json({ error: "No workspace found" }, { status: 404 });
+  }
+
+  const body = await req.json();
+  const { id, ...updates } = body;
+
+  if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+
+  // Verify lead belongs to this workspace
+  const { data: existingLead } = await supabase
+    .from("leads")
+    .select("id, pipeline_stage, workspace_id")
+    .eq("id", id)
+    .single();
+
+  if (!existingLead || existingLead.workspace_id !== user.workspace_id) {
+    return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  }
+
+  // Track stage change for audit log
+  const stageChanged = updates.pipeline_stage && existingLead.pipeline_stage !== updates.pipeline_stage;
+
+  // Add previous stage to history if moving
+  if (stageChanged) {
+    const prevStages = [existingLead.pipeline_stage];
+    updates.previous_stages = [...prevStages];
+  }
+
+  const { data, error } = await supabase
+    .from("leads")
+    .update(updates)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  return NextResponse.json({ lead: data });
+}

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { clerkClient } from "@clerk/nextjs/server";
+import { Webhook } from "svix";
 
 // Default workspace ID — matches the demo workspace in seed data
 const DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
@@ -9,8 +9,15 @@ const DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
 // POST /api/webhooks/clerk
 // Handles: user.created, user.updated, user.deleted from Clerk
 // Auto-assigns new users to the default workspace as "agent"
+// ─────────────────────────────────────────────────────────────────────────────
+// Setup steps:
+// 1. In Clerk Dashboard → Webhooks → Add Endpoint
+// 2. URL: https://your-domain.com/api/webhooks/clerk (use ngrok for local)
+// 3. Enable events: user.created, user.updated, user.deleted
+// 4. Copy the Signing Secret (whsec_...) to CLERK_WEBHOOK_SECRET in .env.local
+// ─────────────────────────────────────────────────────────────────────────────
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const body = await req.text();
   const headers = req.headers;
 
@@ -24,11 +31,13 @@ export async function POST(req: Request) {
 
   const webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    return NextResponse.json({ error: "Missing CLERK_WEBHOOK_SECRET" }, { status: 500 });
+    console.error("CLERK_WEBHOOK_SECRET is not set");
+    return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
   }
 
-  // Verify webhook signature (add svix verification in production)
-  let event: {
+  // Verify webhook signature using svix
+  const wh = new Webhook(webhookSecret);
+  let evt: {
     type: string;
     data: {
       id?: string;
@@ -39,25 +48,28 @@ export async function POST(req: Request) {
       public_metadata?: Record<string, unknown>;
     };
   };
+
   try {
-    event = JSON.parse(body);
+    evt = wh.verify(body, {
+      "svix-id": svix_id,
+      "svix-timestamp": svix_timestamp,
+      "svix-signature": svix_signature,
+    }) as typeof evt;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
   const { createServiceSupabaseClient } = await import("@/lib/supabase/server");
   const supabase = createServiceSupabaseClient();
   if (!supabase) return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
 
-  switch (event.type) {
+  const { id: clerk_user_id, email_addresses, first_name, last_name, image_url, public_metadata } = evt.data;
+
+  switch (evt.type) {
     case "user.created": {
-      const { id: clerk_user_id, email_addresses, first_name, last_name, image_url, public_metadata } = event.data;
       const primaryEmail = email_addresses?.[0]?.email_address ?? "";
       const fullName = [first_name, last_name].filter(Boolean).join(" ") || null;
-      const role = (public_metadata?.role as string) || null;
-
-      // Auto-assign to default workspace if no specific role in metadata
-      const assignedRole = role || "agent";
+      const role = (public_metadata?.role as string) || "agent";
 
       const { error } = await supabase.from("users").upsert({
         clerk_user_id,
@@ -65,18 +77,18 @@ export async function POST(req: Request) {
         email: primaryEmail,
         full_name: fullName,
         avatar_url: image_url || null,
-        role: assignedRole,
+        role,
       });
 
       if (error) {
-        console.error("clerk webhook: user.created error", error);
+        console.error("webhook user.created error:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
+      console.log(`User created: ${clerk_user_id} → workspace ${DEFAULT_WORKSPACE_ID} as ${role}`);
       break;
     }
 
     case "user.updated": {
-      const { id: clerk_user_id, email_addresses, first_name, last_name, image_url, public_metadata } = event.data;
       const primaryEmail = email_addresses?.[0]?.email_address ?? "";
 
       const { error } = await supabase
@@ -90,21 +102,20 @@ export async function POST(req: Request) {
         .eq("clerk_user_id", clerk_user_id);
 
       if (error) {
-        console.error("clerk webhook: user.updated error", error);
+        console.error("webhook user.updated error:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
       break;
     }
 
     case "user.deleted": {
-      const { id: clerk_user_id } = event.data;
       const { error } = await supabase
         .from("users")
         .delete()
         .eq("clerk_user_id", clerk_user_id);
 
       if (error) {
-        console.error("clerk webhook: user.deleted error", error);
+        console.error("webhook user.deleted error:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
       break;
