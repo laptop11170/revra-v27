@@ -199,6 +199,120 @@ CREATE TABLE IF NOT EXISTS pipeline_moves (
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_moves_lead_id ON pipeline_moves(lead_id);
 
+-- ── APPOINTMENTS ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS appointments (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  lead_id      UUID REFERENCES leads(id) ON DELETE SET NULL,
+  agent_id     UUID NOT NULL REFERENCES users(id),
+  title        TEXT NOT NULL,
+  date         TEXT NOT NULL,
+  time         TEXT NOT NULL,
+  duration     INTEGER DEFAULT 30,
+  type         TEXT DEFAULT 'Phone',
+  status       TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'cancelled')),
+  meeting_link TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_appointments_workspace_id ON appointments(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_agent_id     ON appointments(agent_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date          ON appointments(date);
+
+-- ── CONVERSATIONS ──────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS conversations (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  lead_id        UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  channel        TEXT NOT NULL,
+  last_message   TEXT,
+  last_message_at TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_workspace_id ON conversations(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_lead_id      ON conversations(lead_id);
+
+-- ── WORKFLOWS ───────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workflows (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  description  TEXT,
+  status       TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'paused')),
+  nodes        JSONB DEFAULT '[]',
+  is_active    BOOLEAN DEFAULT false,
+  runs         INTEGER DEFAULT 0,
+  effectiveness INTEGER DEFAULT 0,
+  last_run     TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_workspace_id ON workflows(workspace_id);
+
+-- ── CHANNELS ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS channels (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  description    TEXT,
+  last_message   TEXT,
+  last_message_at TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_channels_workspace_id ON channels(workspace_id);
+
+-- ── CHANNEL_MESSAGES ───────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS channel_messages (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  user_id    UUID NOT NULL REFERENCES users(id),
+  author_name TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_messages_channel_id ON channel_messages(channel_id);
+CREATE INDEX IF NOT EXISTS idx_channel_messages_workspace_id ON channel_messages(workspace_id);
+
+-- ── EMMA_QUEUE ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS emma_queue (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  phone         TEXT NOT NULL,
+  type          TEXT DEFAULT 'call' CHECK (type IN ('call', 'sms', 'email')),
+  campaign_name TEXT,
+  status        TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'failed')),
+  added_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_emma_queue_workspace_id ON emma_queue(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_emma_queue_status       ON emma_queue(status);
+
+-- ── EMMA_CAMPAIGNS ─────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS emma_campaigns (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  target       TEXT,
+  stages       JSONB DEFAULT '[]',
+  agents       INTEGER DEFAULT 1,
+  status       TEXT DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed')),
+  queue_size   INTEGER DEFAULT 0,
+  completed    INTEGER DEFAULT 0,
+  failed       INTEGER DEFAULT 0,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_emma_campaigns_workspace_id ON emma_campaigns(workspace_id);
+
 -- ── CALLS ───────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS calls (
   id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -232,6 +346,7 @@ CREATE TABLE IF NOT EXISTS messages (
   workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   lead_id        UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
   agent_id       UUID REFERENCES users(id),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
   channel        message_channel NOT NULL,
   direction      message_direction NOT NULL,
   body           TEXT NOT NULL,
@@ -327,6 +442,26 @@ CREATE INDEX IF NOT EXISTS idx_calendar_events_workspace_id ON calendar_events(w
 CREATE INDEX IF NOT EXISTS idx_calendar_events_lead_id     ON calendar_events(lead_id);
 CREATE INDEX IF NOT EXISTS idx_calendar_events_agent_id     ON calendar_events(agent_id);
 
+-- ── CAMPAIGNS ─────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS campaigns (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  channel        TEXT NOT NULL CHECK (channel IN ('sms', 'email', 'multi')),
+  status         TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'active', 'paused', 'completed')),
+  leads          INTEGER DEFAULT 0,
+  sent           INTEGER DEFAULT 0,
+  delivered      INTEGER DEFAULT 0,
+  clicked        INTEGER DEFAULT 0,
+  replied        INTEGER DEFAULT 0,
+  sender_id      TEXT,
+  start_date     TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaigns_workspace_id ON campaigns(workspace_id);
+
 -- ── INTEGRATIONS ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS integrations (
   id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -396,12 +531,20 @@ ALTER TABLE users             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE leads             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_stages   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_moves    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE calls             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE appointments         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workflows             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE channels              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE channel_messages      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE emma_queue            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE emma_campaigns        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE calls                 ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_messages       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE calendar_events   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE campaigns           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE integrations      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhooks_log       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_providers      ENABLE ROW LEVEL SECURITY;
@@ -464,6 +607,185 @@ CREATE POLICY "Admins create leads" ON leads FOR INSERT
 
 DROP POLICY IF EXISTS "Admins delete leads" ON leads;
 CREATE POLICY "Admins delete leads" ON leads FOR DELETE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+      AND role IN ('admin', 'superadmin')
+    )
+  );
+
+DROP POLICY IF EXISTS "Workspace workflows visible to members" ON workflows;
+CREATE POLICY "Workspace workflows visible to members" ON workflows FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create workflows" ON workflows;
+CREATE POLICY "Members create workflows" ON workflows FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+      AND role IN ('admin', 'superadmin')
+    )
+  );
+
+DROP POLICY IF EXISTS "Members update workflows" ON workflows;
+CREATE POLICY "Members update workflows" ON workflows FOR UPDATE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+      AND role IN ('admin', 'superadmin')
+    )
+  );
+
+DROP POLICY IF EXISTS "Admins delete workflows" ON workflows;
+CREATE POLICY "Admins delete workflows" ON workflows FOR DELETE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+      AND role IN ('admin', 'superadmin')
+    )
+  );
+
+-- ── APPOINTMENTS POLICIES ─────────────────────────────────────────────────
+DROP POLICY IF EXISTS "Members access appointments" ON appointments;
+CREATE POLICY "Members access appointments" ON appointments FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create appointments" ON appointments;
+CREATE POLICY "Members create appointments" ON appointments FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members update appointments" ON appointments;
+CREATE POLICY "Members update appointments" ON appointments FOR UPDATE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members delete appointments" ON appointments;
+CREATE POLICY "Members delete appointments" ON appointments FOR DELETE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+-- ── CONVERSATIONS POLICIES ────────────────────────────────────────────────
+DROP POLICY IF EXISTS "Members access conversations" ON conversations;
+CREATE POLICY "Members access conversations" ON conversations FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create conversations" ON conversations;
+CREATE POLICY "Members create conversations" ON conversations FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members update conversations" ON conversations;
+CREATE POLICY "Members update conversations" ON conversations FOR UPDATE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+-- ── CHANNELS POLICIES ────────────────────────────────────────────────────
+DROP POLICY IF EXISTS "Members access channels" ON channels;
+CREATE POLICY "Members access channels" ON channels FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create channels" ON channels;
+CREATE POLICY "Members create channels" ON channels FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members update channels" ON channels;
+CREATE POLICY "Members update channels" ON channels FOR UPDATE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+-- ── CHANNEL_MESSAGES POLICIES ────────────────────────────────────────────
+DROP POLICY IF EXISTS "Members access channel messages" ON channel_messages;
+CREATE POLICY "Members access channel messages" ON channel_messages FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create channel messages" ON channel_messages;
+CREATE POLICY "Members create channel messages" ON channel_messages FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+-- ── EMMA_QUEUE POLICIES ─────────────────────────────────────────────────
+DROP POLICY IF EXISTS "Members access emma queue" ON emma_queue;
+CREATE POLICY "Members access emma queue" ON emma_queue FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create emma queue" ON emma_queue;
+CREATE POLICY "Members create emma queue" ON emma_queue FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+-- ── EMMA_CAMPAIGNS POLICIES ───────────────────────────────────────────────
+DROP POLICY IF EXISTS "Members access emma campaigns" ON emma_campaigns;
+CREATE POLICY "Members access emma campaigns" ON emma_campaigns FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Admins create emma campaigns" ON emma_campaigns;
+CREATE POLICY "Admins create emma campaigns" ON emma_campaigns FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+      AND role IN ('admin', 'superadmin')
+    )
+  );
+
+DROP POLICY IF EXISTS "Admins update emma campaigns" ON emma_campaigns;
+CREATE POLICY "Admins update emma campaigns" ON emma_campaigns FOR UPDATE
   USING (
     workspace_id IN (
       SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
@@ -631,6 +953,39 @@ CREATE POLICY "Agents manage events" ON calendar_events FOR ALL
     )
   );
 
+DROP POLICY IF EXISTS "Workspace campaigns visible to members" ON campaigns;
+CREATE POLICY "Workspace campaigns visible to members" ON campaigns FOR SELECT
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members create campaigns" ON campaigns;
+CREATE POLICY "Members create campaigns" ON campaigns FOR INSERT
+  WITH CHECK (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Members update campaigns" ON campaigns;
+CREATE POLICY "Members update campaigns" ON campaigns FOR UPDATE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS "Admins delete campaigns" ON campaigns;
+CREATE POLICY "Admins delete campaigns" ON campaigns FOR DELETE
+  USING (
+    workspace_id IN (
+      SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+      AND role IN ('admin', 'superadmin')
+    )
+  );
+
 DROP POLICY IF EXISTS "Admins manage integrations" ON integrations;
 CREATE POLICY "Admins manage integrations" ON integrations FOR ALL
   USING (
@@ -678,6 +1033,36 @@ CREATE TRIGGER workspaces_updated_at
   BEFORE UPDATE ON workspaces
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS appointments_updated_at ON appointments;
+CREATE TRIGGER appointments_updated_at
+  BEFORE UPDATE ON appointments
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS conversations_updated_at ON conversations;
+CREATE TRIGGER conversations_updated_at
+  BEFORE UPDATE ON conversations
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS workflows_updated_at ON workflows;
+CREATE TRIGGER workflows_updated_at
+  BEFORE UPDATE ON workflows
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS channels_updated_at ON channels;
+CREATE TRIGGER channels_updated_at
+  BEFORE UPDATE ON channels
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS campaigns_updated_at ON campaigns;
+CREATE TRIGGER campaigns_updated_at
+  BEFORE UPDATE ON campaigns
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS emma_campaigns_updated_at ON emma_campaigns;
+CREATE TRIGGER emma_campaigns_updated_at
+  BEFORE UPDATE ON emma_campaigns
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 DROP TRIGGER IF EXISTS leads_updated_at ON leads;
 CREATE TRIGGER leads_updated_at
   BEFORE UPDATE ON leads
@@ -703,6 +1088,16 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS workflows_updated_at ON workflows;
+CREATE TRIGGER workflows_updated_at
+  BEFORE UPDATE ON workflows
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS campaigns_updated_at ON campaigns;
+CREATE TRIGGER campaigns_updated_at
+  BEFORE UPDATE ON campaigns
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS leads_pipeline_move ON leads;
 CREATE TRIGGER leads_pipeline_move
