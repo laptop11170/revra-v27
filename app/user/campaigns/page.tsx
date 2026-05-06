@@ -68,8 +68,14 @@ export default function CampaignsPage() {
   const [showNewModal, setShowNewModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState("SMS");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [showSendModal, setShowSendModal] = useState<string | null>(null);
   const [smsDraft, setSmsDraft] = useState("");
+  const [scheduleLater, setScheduleLater] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [totalLeads, setTotalLeads] = useState(0);
+  const [senderId, setSenderId] = useState("Revra Sales");
 
   const fetchCampaigns = useCallback(async () => {
     setLoading(true);
@@ -84,6 +90,18 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  // Fetch total lead count for the "All Leads" count in modal
+  useEffect(() => {
+    async function fetchLeadCount() {
+      const res = await fetch("/api/leads?limit=1");
+      if (res.ok) {
+        const data = await res.json();
+        setTotalLeads(data.total ?? 0);
+      }
+    }
+    fetchLeadCount();
   }, []);
 
   useEffect(() => {
@@ -380,14 +398,50 @@ export default function CampaignsPage() {
                 <label className="input-label">Select Leads</label>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: "var(--radius-lg)", background: "var(--surface-4)", border: "1px solid var(--line)" }}>
                   <Users size={16} style={{ color: "var(--ink-mute)" }} />
-                  <span style={{ fontSize: 13, color: "var(--ink)" }}>All Leads — 125,430 contacts</span>
-                  <button className="btn-ghost" style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 12 }}>Change</button>
+                  <span style={{ fontSize: 13, color: "var(--ink)" }}>All Leads — {totalLeads.toLocaleString()} contacts</span>
+                  <button className="btn-ghost" style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 12 }} onClick={() => { /* lead filter modal - future */ }}>Change</button>
                 </div>
               </div>
+              {createError && (
+                <div style={{ color: "hsl(var(--destructive))", fontSize: 13, padding: "8px 12px", borderRadius: 8, background: "hsl(var(--destructive)/0.1)" }}>
+                  {createError}
+                </div>
+              )}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px", borderTop: "1px solid rgba(37,43,63,0.5)" }}>
               <button className="btn-ghost" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setShowNewModal(false)}>Cancel</button>
-              <button className="btn-primary" style={{ padding: "8px 16px", fontSize: 13 }}>Create Campaign</button>
+              <button
+              className="btn-primary"
+              style={{ padding: "8px 16px", fontSize: 13 }}
+              disabled={creating || !newName.trim()}
+              onClick={async () => {
+                if (!newName.trim()) return;
+                setCreating(true);
+                setCreateError("");
+                try {
+                  const channelMap: Record<string, string> = { SMS: "sms", Email: "email", Multi: "multi" };
+                  const res = await fetch("/api/campaigns", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: newName.trim(), channel: channelMap[newType] || "sms", status: "draft" }),
+                  });
+                  if (res.ok) {
+                    const json = await res.json();
+                    setCampaigns((prev) => [json.campaign, ...prev]);
+                    setShowNewModal(false);
+                    setNewName("");
+                    setNewType("SMS");
+                  } else {
+                    const err = await res.json();
+                    setCreateError(err.error || "Failed to create campaign");
+                  }
+                } catch { setCreateError("Network error. Please try again."); }
+                finally { setCreating(false); }
+              }}
+            >
+              {creating ? <Loader2 size={13} className="animate-spin" /> : null}
+              Create Campaign
+            </button>
             </div>
           </div>
         </div>
@@ -449,7 +503,7 @@ export default function CampaignsPage() {
               </div>
               <div>
                 <label className="input-label">Sender ID</label>
-                <select className="input" style={{ appearance: "none" }}>
+                <select className="input" style={{ appearance: "none" }} value={senderId} onChange={(e) => setSenderId(e.target.value)}>
                   <option>Revra Sales</option>
                   <option>Revra Team</option>
                 </select>
@@ -457,12 +511,38 @@ export default function CampaignsPage() {
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px", borderTop: "1px solid rgba(37,43,63,0.5)" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--ink-mute)", cursor: "pointer" }}>
-                <span className="check-box" />
+                <input
+                  type="checkbox"
+                  checked={scheduleLater}
+                  onChange={(e) => setScheduleLater(e.target.checked)}
+                  style={{ accentColor: "var(--indi-500)", cursor: "pointer" }}
+                />
                 Schedule for later
               </label>
-              <button className="btn-primary" style={{ padding: "8px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-                <Send size={13} />
-                Send Now
+              <button
+                className="btn-primary"
+                style={{ padding: "8px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
+                disabled={sending || !smsDraft.trim()}
+                onClick={async () => {
+                  if (!smsDraft.trim() || !showSendModal) return;
+                  setSending(true);
+                  try {
+                    const res = await fetch(`/api/campaigns/${showSendModal}/send`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ message: smsDraft, sender_id: senderId, scheduled: scheduleLater }),
+                    });
+                    if (res.ok) {
+                      setShowSendModal(null);
+                      fetchCampaigns();
+                    }
+                  } finally {
+                    setSending(false);
+                  }
+                }}
+              >
+                {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+                {scheduleLater ? "Schedule" : "Send Now"}
               </button>
             </div>
           </div>

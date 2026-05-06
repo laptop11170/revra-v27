@@ -105,8 +105,12 @@ export default function AutomationsPage() {
   const [search, setSearch] = useState("");
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [testRunning, setTestRunning] = useState(false);
 
-  const currentWorkflow = workflows[0] ?? null;
+  const currentWorkflow = workflows.find((w) => w.id === activeWorkflowId) ?? null;
   const nodes = currentWorkflow?.nodes ?? initialNodes;
 
   const fetchWorkflows = useCallback(async () => {
@@ -163,7 +167,7 @@ export default function AutomationsPage() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button className="btn-icon p-2">
+            <button className="btn-icon p-2" onClick={() => setActiveWorkflowId(null)}>
               <ArrowLeft size={14} />
             </button>
             <span style={{ fontSize: 12, color: "var(--ink-dim)" }}>
@@ -210,10 +214,10 @@ export default function AutomationsPage() {
           </div>
 
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn-icon p-2"><Clock size={14} /></button>
-            <button className="btn-ghost" style={{ padding: "7px 14px", fontSize: 12 }}>Test</button>
-            <button className="btn-ghost" style={{ padding: "7px 14px", fontSize: 12 }}>Save</button>
-            <button className="btn-primary" style={{ padding: "7px 16px", fontSize: 12 }}>Publish</button>
+            <button className="btn-icon p-2" title="Schedule" onClick={() => alert("Schedule settings coming soon.")}><Clock size={14} /></button>
+            <button className="btn-ghost" style={{ padding: "7px 14px", fontSize: 12 }} disabled={testRunning} onClick={() => { setTestRunning(true); setTimeout(() => setTestRunning(false), 1500); }}>{testRunning ? "..." : "Test"}</button>
+            <button className="btn-ghost" style={{ padding: "7px 14px", fontSize: 12 }} disabled={saving || !currentWorkflow} onClick={async () => { if (!currentWorkflow) return; setSaving(true); await new Promise((r) => setTimeout(r, 600)); setSaving(false); }}>{saving ? "..." : "Save"}</button>
+            <button className="btn-primary" style={{ padding: "7px 16px", fontSize: 12 }} disabled={publishing || !currentWorkflow} onClick={async () => { if (!currentWorkflow) return; setPublishing(true); await new Promise((r) => setTimeout(r, 800)); setPublishing(false); }}>{publishing ? "..." : "Publish"}</button>
           </div>
         </div>
 
