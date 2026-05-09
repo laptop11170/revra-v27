@@ -72,7 +72,7 @@ EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 
 DO $$ BEGIN
-  CREATE TYPE integration_provider AS ENUM ('twilio', 'loopmessages', 'sendgrid', 'google');
+  CREATE TYPE integration_provider AS ENUM ('twilio', 'loopmessages', 'sendgrid', 'google', 'meta_ads', 'hubspot', 'salesforce', 'stripe', 'slack', 'zapier', 'calendly', 'aircall', 'intercom');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 
@@ -466,14 +466,20 @@ CREATE INDEX IF NOT EXISTS idx_campaigns_workspace_id ON campaigns(workspace_id)
 CREATE TABLE IF NOT EXISTS integrations (
   id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  provider     integration_provider NOT NULL,
-  credentials  JSONB NOT NULL,
+  name         TEXT NOT NULL,
+  category     TEXT,
+  provider     integration_provider,
+  description  TEXT,
+  credentials  JSONB DEFAULT '{}',
   settings     JSONB DEFAULT '{}',
-  status       integration_status DEFAULT 'active',
+  status       integration_status DEFAULT 'disconnected',
+  is_connected BOOLEAN DEFAULT false,
   last_sync_at TIMESTAMPTZ,
   error_message TEXT,
+  initials     TEXT,
+  color        TEXT,
   created_at   TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(workspace_id, provider)
+  UNIQUE(workspace_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_integrations_workspace_id ON integrations(workspace_id);
@@ -1088,16 +1094,6 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
-
-DROP TRIGGER IF EXISTS workflows_updated_at ON workflows;
-CREATE TRIGGER workflows_updated_at
-  BEFORE UPDATE ON workflows
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
-DROP TRIGGER IF EXISTS campaigns_updated_at ON campaigns;
-CREATE TRIGGER campaigns_updated_at
-  BEFORE UPDATE ON campaigns
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS leads_pipeline_move ON leads;
 CREATE TRIGGER leads_pipeline_move
