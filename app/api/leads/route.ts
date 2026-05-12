@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+import { getEmmaClient } from "@/lib/emma/client";
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
@@ -110,6 +111,11 @@ export async function POST(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Push lead to Emma AI (fire-and-forget; don't fail lead creation if Emma is unavailable)
+  if (data) {
+    pushToEmma(supabase, data.id, data).catch(() => {});
+  }
+
   return NextResponse.json({ lead: data }, { status: 201 });
 }
 
@@ -164,5 +170,70 @@ export async function PATCH(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Sync stage change to Emma AI (fire-and-forget)
+  if (stageChanged && data) {
+    syncStageToEmma(supabase, id, String(updates.pipeline_stage), data).catch(() => {});
+  }
+
   return NextResponse.json({ lead: data });
+}
+
+// ── Emma AI sync helpers ────────────────────────────────────────────────────
+
+const STAGE_MAP: Record<string, string> = {
+  new_lead: "new",
+  contacted: "contacted",
+  qualified: "qualified",
+  booked: "booked",
+  converted: "converted",
+  lost: "lost",
+  dnc: "dnc",
+};
+
+async function pushToEmma(
+  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  leadId: string,
+  lead: Record<string, unknown>
+): Promise<void> {
+  try {
+    const emma = getEmmaClient();
+    const emmaLead = await emma.createLead({
+      first_name: String(lead.first_name),
+      last_name: lead.last_name ? String(lead.last_name) : undefined,
+      email: lead.email ? String(lead.email) : undefined,
+      phone: String(lead.phone),
+      status: STAGE_MAP[String(lead.pipeline_stage)] ?? "new",
+      tags: (lead.tags as string[]) || [],
+    });
+
+    await supabase
+      .from("leads")
+      .update({
+        enrichment_data: {
+          ...((lead.enrichment_data as Record<string, unknown>) || {}),
+          emma_lead_id: emmaLead.id,
+        },
+      })
+      .eq("id", leadId);
+  } catch {
+    // Non-blocking
+  }
+}
+
+async function syncStageToEmma(
+  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  leadId: string,
+  newStage: string,
+  lead: Record<string, unknown>
+): Promise<void> {
+  try {
+    const enrichment = (lead.enrichment_data as Record<string, unknown>) || {};
+    const emmaLeadId = enrichment.emma_lead_id as string | undefined;
+    if (!emmaLeadId) return;
+
+    const emma = getEmmaClient();
+    await emma.updateLead(emmaLeadId, { status: STAGE_MAP[newStage] ?? newStage });
+  } catch {
+    // Non-blocking
+  }
 }

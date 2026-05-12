@@ -1,6 +1,24 @@
+// app/api/campaigns/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+
+// GET /api/campaigns/[id] — get campaign details
+// PATCH /api/campaigns/[id] — update campaign (name, status, keywords)
+// DELETE /api/campaigns/[id] — delete campaign
+
+async function getCampaignForWorkspace(
+  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  campaignId: string,
+  workspaceId: string
+) {
+  return supabase
+    .from("campaigns")
+    .select("*")
+    .eq("id", campaignId)
+    .eq("workspace_id", workspaceId)
+    .single();
+}
 
 export async function GET(
   req: NextRequest,
@@ -9,7 +27,6 @@ export async function GET(
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
   const supabase = createServiceSupabaseClient();
   if (!supabase) return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
 
@@ -19,22 +36,14 @@ export async function GET(
     .eq("clerk_user_id", userId)
     .single();
 
-  if (!user?.workspace_id) {
-    return NextResponse.json({ error: "No workspace found" }, { status: 404 });
-  }
+  if (!user?.workspace_id) return NextResponse.json({ error: "No workspace" }, { status: 404 });
 
-  const { data, error } = await supabase
-    .from("campaigns")
-    .select("*")
-    .eq("id", id)
-    .eq("workspace_id", user.workspace_id)
-    .single();
+  const { id } = await params;
+  const { data: campaign, error } = await getCampaignForWorkspace(supabase, id, user.workspace_id);
 
-  if (error || !data) {
-    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  }
+  if (error || !campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
 
-  return NextResponse.json({ campaign: data });
+  return NextResponse.json({ campaign });
 }
 
 export async function PATCH(
@@ -44,7 +53,6 @@ export async function PATCH(
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
   const supabase = createServiceSupabaseClient();
   if (!supabase) return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
 
@@ -54,25 +62,53 @@ export async function PATCH(
     .eq("clerk_user_id", userId)
     .single();
 
-  if (!user?.workspace_id) {
-    return NextResponse.json({ error: "No workspace found" }, { status: 404 });
-  }
+  if (!user?.workspace_id) return NextResponse.json({ error: "No workspace" }, { status: 404 });
 
-  const body = await req.json();
+  const { id } = await params;
+  const { data: existing } = await getCampaignForWorkspace(supabase, id, user.workspace_id);
+
+  if (!existing) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+
   const allowedFields = [
-    "name", "channel", "status", "sent", "delivered",
-    "clicked", "replied", "leads", "start_date",
+    "name", "status", "positive_keywords", "optout_keywords",
+    "sender_phone_id", "message_body", "start_date",
   ];
   const updateData: Record<string, unknown> = {};
   for (const field of allowedFields) {
     if (field in body) updateData[field] = body[field];
   }
 
+  // Only allow keyword edits on draft campaigns
+  if (existing.status !== "draft" && (body.positive_keywords || body.optout_keywords)) {
+    return NextResponse.json(
+      { error: "Keywords can only be edited on draft campaigns" },
+      { status: 400 }
+    );
+  }
+
+  // Validate status transitions
+  const validTransitions: Record<string, string[]> = {
+    draft: ["active", "scheduled"],
+    scheduled: ["active", "paused", "draft"],
+    active: ["paused", "completed"],
+    paused: ["active", "completed"],
+    completed: [],
+  };
+
+  if (body.status && !validTransitions[existing.status]?.includes(body.status)) {
+    return NextResponse.json(
+      { error: `Cannot transition from ${existing.status} to ${body.status}` },
+      { status: 400 }
+    );
+  }
+
   const { data, error } = await supabase
     .from("campaigns")
     .update(updateData)
     .eq("id", id)
-    .eq("workspace_id", user.workspace_id)
     .select()
     .single();
 
@@ -88,87 +124,28 @@ export async function DELETE(
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
   const supabase = createServiceSupabaseClient();
   if (!supabase) return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
 
   const { data: user } = await supabase
     .from("users")
-    .select("workspace_id")
+    .select("workspace_id, role")
     .eq("clerk_user_id", userId)
     .single();
 
-  if (!user?.workspace_id) {
-    return NextResponse.json({ error: "No workspace found" }, { status: 404 });
+  if (!user?.workspace_id) return NextResponse.json({ error: "No workspace" }, { status: 404 });
+  if (user.role === "agent") return NextResponse.json({ error: "Agents cannot delete campaigns" }, { status: 403 });
+
+  const { id } = await params;
+  const { data: existing } = await getCampaignForWorkspace(supabase, id, user.workspace_id);
+
+  if (!existing) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  if (existing.status === "active") {
+    return NextResponse.json({ error: "Cannot delete an active campaign" }, { status: 400 });
   }
 
-  const { error } = await supabase
-    .from("campaigns")
-    .delete()
-    .eq("id", id)
-    .eq("workspace_id", user.workspace_id);
-
+  const { error } = await supabase.from("campaigns").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json({ success: true });
-}
-
-// POST /api/campaigns/[id]/send — trigger campaign send
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { id } = await params;
-  const supabase = createServiceSupabaseClient();
-  if (!supabase) return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
-
-  const { data: user } = await supabase
-    .from("users")
-    .select("workspace_id")
-    .eq("clerk_user_id", userId)
-    .single();
-
-  if (!user?.workspace_id) {
-    return NextResponse.json({ error: "No workspace found" }, { status: 404 });
-  }
-
-  const body = await req.json();
-  const { message, sender_id, scheduled } = body;
-
-  if (!message?.trim()) {
-    return NextResponse.json({ error: "message is required" }, { status: 400 });
-  }
-
-  // Get campaign to check it belongs to workspace
-  const { data: campaign } = await supabase
-    .from("campaigns")
-    .select("id, leads, status")
-    .eq("id", id)
-    .eq("workspace_id", user.workspace_id)
-    .single();
-
-  if (!campaign) {
-    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
-  }
-
-  // Update campaign status to active and increment sent count
-  const newStatus = scheduled ? "paused" : "active";
-  const { data, error } = await supabase
-    .from("campaigns")
-    .update({
-      status: newStatus,
-      sent: (campaign.leads || 0),
-      delivered: Math.floor((campaign.leads || 0) * 0.92),
-      replied: 0,
-    })
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  return NextResponse.json({ campaign: data, scheduled });
 }

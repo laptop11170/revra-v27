@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServiceSupabaseClient } from "@/lib/supabase/server";
+import { getEmmaClient } from "@/lib/emma/client";
 
 export async function GET(
   req: NextRequest,
@@ -82,7 +83,43 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Sync stage change to Emma AI (fire-and-forget)
+  const { pipeline_stage } = body;
+  if (pipeline_stage) {
+    syncStageToEmma(supabase, id, data).catch(() => {});
+  }
+
   return NextResponse.json({ lead: data });
+}
+
+const STAGE_MAP: Record<string, string> = {
+  new_lead: "new",
+  contacted: "contacted",
+  qualified: "qualified",
+  booked: "booked",
+  converted: "converted",
+  lost: "lost",
+  dnc: "dnc",
+};
+
+async function syncStageToEmma(
+  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  leadId: string,
+  lead: Record<string, unknown>
+): Promise<void> {
+  try {
+    const enrichment = (lead.enrichment_data as Record<string, unknown>) || {};
+    const emmaLeadId = enrichment.emma_lead_id as string | undefined;
+    if (!emmaLeadId) return;
+
+    const emma = getEmmaClient();
+    await emma.updateLead(emmaLeadId, {
+      status: STAGE_MAP[String(lead.pipeline_stage)] ?? String(lead.pipeline_stage),
+    });
+  } catch {
+    // Non-blocking
+  }
 }
 
 export async function DELETE(

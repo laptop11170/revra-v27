@@ -33,6 +33,7 @@ type ApiLead = {
   last_message_at: string | null;
   created_at: string;
   tags: string[];
+  opted_out: boolean;
 };
 
 const stages = ["All Leads", "Hot", "Warm", "New", "Booked", "Nurture", "Cold"];
@@ -65,6 +66,24 @@ export default function LeadsPage() {
   const [search, setSearch] = useState("");
   const [showBulkSMS, setShowBulkSMS] = useState(false);
   const [smsDraft, setSmsDraft] = useState("Hey there! Check out our latest offer just for you.\nLimited time only. Act now!\nReply STOP to opt out.");
+  const [phones, setPhones] = useState<Array<{ id: string; phone_number: string; label: string | null }>>([]);
+  const [selectedPhoneId, setSelectedPhoneId] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+
+  // Load Sendillo phones when bulk SMS modal opens
+  useEffect(() => {
+    if (showBulkSMS) {
+      fetch("/api/sendillo/numbers?type=registered")
+        .then((r) => r.json())
+        .then((d) => {
+          setPhones(d.numbers ?? []);
+          if (d.numbers?.[0]?.id) setSelectedPhoneId(d.numbers[0].id);
+        })
+        .catch(() => {});
+    }
+  }, [showBulkSMS]);
+
   const [leads, setLeads] = useState<ApiLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +95,7 @@ export default function LeadsPage() {
       const res = await fetch("/api/leads");
       if (!res.ok) throw new Error(`Failed to fetch leads: ${res.status}`);
       const data = await res.json();
-      setLeads(data.leads || []);
+      setLeads((data.leads || []).map((l: ApiLead) => ({ ...l, opted_out: false })));
     } catch (err: any) {
       setError(err.message ?? "Failed to load leads");
     } finally {
@@ -380,8 +399,8 @@ export default function LeadsPage() {
                     <Users size={20} style={{ color: "var(--ink-mute)" }} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>5,000 Leads</div>
-                    <div style={{ fontSize: 12, color: "var(--ink-mute)" }}>From list: All Leads</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{filteredLeads.filter((l) => !l.opted_out).length} Leads</div>
+                    <div style={{ fontSize: 12, color: "var(--ink-mute)" }}>From list: {activeFilter}</div>
                   </div>
                   <button className="btn-ghost" style={{ padding: "6px 12px", fontSize: 12 }}>Change</button>
                 </div>
@@ -428,9 +447,13 @@ export default function LeadsPage() {
                 <select
                   className="input"
                   style={{ appearance: "none" }}
+                  value={selectedPhoneId}
+                  onChange={(e) => setSelectedPhoneId(e.target.value)}
                 >
-                  <option>Revra Sales</option>
-                  <option>Revra Team</option>
+                  {phones.length === 0 && <option>No Sendillo numbers available</option>}
+                  {phones.map((p) => (
+                    <option key={p.id} value={p.id}>{p.phone_number}{p.label ? ` — ${p.label}` : ""}</option>
+                  ))}
                 </select>
               </div>
 
@@ -447,9 +470,9 @@ export default function LeadsPage() {
                 }}
               >
                 {[
-                  { label: "Total Recipients", value: "5,000" },
-                  { label: "Estimated Parts", value: "1 SMS" },
-                  { label: "Estimated Cost", value: "$250.00" },
+                  { label: "Total Recipients", value: String(filteredLeads.filter((l) => !l.opted_out).length) },
+                  { label: "SMS Segments", value: `${Math.ceil(smsDraft.length / 160) || 1} part` },
+                  { label: "Opted Out", value: String(filteredLeads.filter((l) => l.opted_out).length) },
                 ].map((s) => (
                   <div key={s.label} style={{ textAlign: "center" }}>
                     <div style={{ fontSize: 12, color: "var(--ink-mute)" }}>{s.label}</div>
@@ -457,6 +480,11 @@ export default function LeadsPage() {
                   </div>
                 ))}
               </div>
+              {sendError && (
+                <div style={{ color: "hsl(var(--destructive))", fontSize: 13, padding: "8px 12px", borderRadius: 8, background: "hsl(var(--destructive)/0.1)" }}>
+                  {sendError}
+                </div>
+              )}
             </div>
 
             {/* Footer */}
@@ -477,8 +505,42 @@ export default function LeadsPage() {
                 <button className="btn-ghost" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setShowBulkSMS(false)}>
                   Cancel
                 </button>
-                <button className="btn-primary" style={{ padding: "8px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Send size={13} />
+                <button className="btn-primary" style={{ padding: "8px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
+                  onClick={async () => {
+                    const validLeads = filteredLeads.filter((l) => !l.opted_out);
+                    if (validLeads.length === 0) { setSendError("No valid leads to send to."); return; }
+                    if (!selectedPhoneId) { setSendError("Select a sender number first."); return; }
+                    setSending(true);
+                    setSendError("");
+                    try {
+                      const res = await fetch("/api/campaigns", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          name: `Quick SMS from Leads — ${new Date().toLocaleDateString()}`,
+                          sender_phone_id: selectedPhoneId,
+                          message_body: smsDraft,
+                          positive_keywords: ["interested", "yes", "more info"],
+                          optout_keywords: ["STOP", "UNSUBSCRIBE", "CANCEL"],
+                          lead_ids: validLeads.map((l) => l.id),
+                        }),
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setShowBulkSMS(false);
+                        setSmsDraft("Hey there! Check out our latest offer just for you.\nLimited time only. Act now!\nReply STOP to opt out.");
+                        // Immediately launch it
+                        await fetch(`/api/campaigns/${data.campaign.id}/send`, { method: "POST" });
+                      } else {
+                        const err = await res.json();
+                        setSendError(err.error ?? "Failed to create campaign");
+                      }
+                    } catch { setSendError("Network error"); }
+                    finally { setSending(false); }
+                  }}
+                  disabled={sending}
+                >
+                  {sending ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Send size={13} />}
                   Send SMS
                 </button>
               </div>

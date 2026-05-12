@@ -14,6 +14,7 @@ import {
   Plug,
   Settings,
   Sparkles,
+  Phone,
   Megaphone,
   Workflow,
   ChevronDown,
@@ -68,6 +69,7 @@ const superadminNav: NavItem[] = [
   { label: "Subscriptions", href: "/superadmin/subscriptions", icon: <Settings size={17} /> },
   { label: "Integrations", href: "/superadmin/integrations", icon: <Plug size={17} /> },
   { label: "AI & LLM", href: "/superadmin/ai", icon: <Sparkles size={17} /> },
+  { label: "Sendillo", href: "/superadmin/sendillo", icon: <Phone size={17} /> },
   { label: "Settings", href: "/superadmin/settings", icon: <Settings size={17} /> },
 ];
 

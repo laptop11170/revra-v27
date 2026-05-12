@@ -72,7 +72,7 @@ EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 
 DO $$ BEGIN
-  CREATE TYPE integration_provider AS ENUM ('twilio', 'loopmessages', 'sendgrid', 'google', 'meta_ads', 'hubspot', 'salesforce', 'stripe', 'slack', 'zapier', 'calendly', 'aircall', 'intercom');
+  CREATE TYPE integration_provider AS ENUM ('twilio', 'loopmessages', 'sendgrid', 'google', 'meta_ads', 'hubspot', 'salesforce', 'stripe', 'slack', 'zapier', 'calendly', 'aircall', 'intercom', 'sendillo');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 
@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name      TEXT,
   role           user_role NOT NULL DEFAULT 'agent',
   avatar_url     TEXT,
+  emma_client_id TEXT,
   last_active_at TIMESTAMPTZ,
   created_at     TIMESTAMPTZ DEFAULT NOW()
 );
@@ -147,6 +148,8 @@ CREATE TABLE IF NOT EXISTS leads (
   is_admin_lead     BOOLEAN DEFAULT false,
   is_marketplace_lead BOOLEAN DEFAULT false,
   calendar_event_id TEXT,
+  opted_out         BOOLEAN DEFAULT false,
+  opted_out_at      TIMESTAMPTZ,
   created_at        TIMESTAMPTZ DEFAULT NOW(),
   updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
@@ -227,12 +230,14 @@ CREATE TABLE IF NOT EXISTS conversations (
   channel        TEXT NOT NULL,
   last_message   TEXT,
   last_message_at TIMESTAMPTZ,
+  unread_count   INTEGER DEFAULT 0,
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversations_workspace_id ON conversations(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_lead_id      ON conversations(lead_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_unread ON conversations(unread_count) WHERE unread_count > 0;
 
 -- ── WORKFLOWS ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS workflows (
@@ -342,21 +347,22 @@ CREATE INDEX IF NOT EXISTS idx_calls_twilio_sid   ON calls(twilio_call_sid);
 
 -- ── MESSAGES ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS messages (
-  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  lead_id        UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  agent_id       UUID REFERENCES users(id),
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  lead_id         UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  agent_id        UUID REFERENCES users(id),
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  channel        message_channel NOT NULL,
-  direction      message_direction NOT NULL,
-  body           TEXT NOT NULL,
-  media_url      TEXT,
-  external_id    TEXT,
+  campaign_id     UUID REFERENCES campaigns(id),
+  channel         message_channel NOT NULL,
+  direction       message_direction NOT NULL,
+  body            TEXT NOT NULL,
+  media_url       TEXT,
+  external_id     TEXT,
   external_status TEXT,
-  ai_generated   BOOLEAN DEFAULT FALSE,
-  ai_context     JSONB,
-  sent_at        TIMESTAMPTZ,
-  created_at     TIMESTAMPTZ DEFAULT NOW()
+  ai_generated    BOOLEAN DEFAULT FALSE,
+  ai_context      JSONB,
+  sent_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_workspace_id ON messages(workspace_id);
@@ -442,22 +448,44 @@ CREATE INDEX IF NOT EXISTS idx_calendar_events_workspace_id ON calendar_events(w
 CREATE INDEX IF NOT EXISTS idx_calendar_events_lead_id     ON calendar_events(lead_id);
 CREATE INDEX IF NOT EXISTS idx_calendar_events_agent_id     ON calendar_events(agent_id);
 
+-- ── SENDILLO PHONE NUMBERS (superadmin managed) ──────────────────────────────
+CREATE TABLE IF NOT EXISTS sendillo_phone_numbers (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id      UUID NOT NULL REFERENCES users(id),
+  phone_number  TEXT NOT NULL,
+  label         TEXT,
+  is_active     BOOLEAN DEFAULT true,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(workspace_id, phone_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sendillo_phone_numbers_agent ON sendillo_phone_numbers(agent_id);
+
 -- ── CAMPAIGNS ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS campaigns (
-  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  name           TEXT NOT NULL,
-  channel        TEXT NOT NULL CHECK (channel IN ('sms', 'email', 'multi')),
-  status         TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'active', 'paused', 'completed')),
-  leads          INTEGER DEFAULT 0,
-  sent           INTEGER DEFAULT 0,
-  delivered      INTEGER DEFAULT 0,
-  clicked        INTEGER DEFAULT 0,
-  replied        INTEGER DEFAULT 0,
-  sender_id      TEXT,
-  start_date     TIMESTAMPTZ,
-  created_at     TIMESTAMPTZ DEFAULT NOW(),
-  updated_at     TIMESTAMPTZ DEFAULT NOW()
+  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id     UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name             TEXT NOT NULL,
+  channel          TEXT NOT NULL CHECK (channel IN ('sms', 'email', 'multi')),
+  status           TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'active', 'paused', 'completed')),
+  leads            INTEGER DEFAULT 0,
+  sent             INTEGER DEFAULT 0,
+  delivered        INTEGER DEFAULT 0,
+  clicked          INTEGER DEFAULT 0,
+  replied          INTEGER DEFAULT 0,
+  failed           INTEGER DEFAULT 0,
+  opted_out        INTEGER DEFAULT 0,
+  emma_synced      INTEGER DEFAULT 0,
+  sender_id        TEXT,
+  sender_phone_id  UUID REFERENCES sendillo_phone_numbers(id),
+  message_body     TEXT,
+  positive_keywords TEXT[] DEFAULT '{}',
+  optout_keywords  TEXT[] DEFAULT '{"STOP","UNSUBSCRIBE","CANCEL"}',
+  start_date       TIMESTAMPTZ,
+  created_by       UUID REFERENCES users(id),
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_campaigns_workspace_id ON campaigns(workspace_id);
@@ -554,7 +582,8 @@ ALTER TABLE campaigns           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE integrations      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhooks_log       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_providers      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE providers         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE providers                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sendillo_phone_numbers     ENABLE ROW LEVEL SECURITY;
 
 -- ── RLS POLICIES ─────────────────────────────────────────────────────────────
 -- auth.uid() returns UUID; clerk_user_id is TEXT — use auth.uid()::text for comparison
@@ -1025,6 +1054,15 @@ CREATE POLICY "Superadmins see providers" ON providers FOR SELECT USING (true);
 DROP POLICY IF EXISTS "Superadmins manage providers" ON providers;
 CREATE POLICY "Superadmins manage providers" ON providers FOR ALL USING (true);
 
+DROP POLICY IF EXISTS "Superadmins manage sendillo phone numbers" ON sendillo_phone_numbers;
+CREATE POLICY "Superadmins manage sendillo phone numbers" ON sendillo_phone_numbers FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Agents view sendillo phone numbers" ON sendillo_phone_numbers;
+CREATE POLICY "Agents view sendillo phone numbers" ON sendillo_phone_numbers FOR SELECT
+  USING (workspace_id IN (
+    SELECT workspace_id FROM users WHERE clerk_user_id = auth.uid()::text
+  ));
+
 -- ── HELPERS & TRIGGERS ────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -1102,6 +1140,56 @@ CREATE TRIGGER leads_pipeline_move
   WHEN (OLD.pipeline_stage IS DISTINCT FROM NEW.pipeline_stage)
   EXECUTE FUNCTION track_pipeline_move();
 
+-- ── Campaign counter RPCs ────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION increment_campaign_sent(campaign_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE campaigns SET sent = sent + 1 WHERE id = campaign_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION increment_campaign_delivered(campaign_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE campaigns SET delivered = delivered + 1 WHERE id = campaign_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION increment_campaign_failed(campaign_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE campaigns SET failed = failed + 1 WHERE id = campaign_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION increment_campaign_replied(campaign_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE campaigns SET replied = replied + 1 WHERE id = campaign_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION increment_campaign_optout(campaign_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE campaigns SET opted_out = opted_out + 1 WHERE id = campaign_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION increment_campaign_emma_synced(campaign_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE campaigns SET emma_synced = emma_synced + 1 WHERE id = campaign_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION increment_conversation_unread(conv_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE conversations SET unread_count = unread_count + 1 WHERE id = conv_id;
+END;
+$$;
+
 COMMIT;
 
 -- ── SEED DATA ────────────────────────────────────────────────────────────────
@@ -1157,6 +1245,11 @@ INSERT INTO providers (id, name, provider_type, description, config_json, is_act
   ('00000000-0000-0000-0000-000000000202', 'LoopMessages',  'messaging', 'iMessage, WhatsApp, RCS via Loop','{"api_key": ""}',           true, 'active', '{"total_messages": 89300,  "delivered": 88200,  "failed": 1100}'),
   ('00000000-0000-0000-0000-000000000203', 'iMessage',      'imessage',  'iMessage via Apple Business Chat','{"apple_id": ""}',         true, 'active', '{"total_messages": 45600,  "delivered": 44800,  "failed": 800}'),
   ('00000000-0000-0000-0000-000000000204', 'WhatsApp',      'whatsapp',  'WhatsApp Business API',          '{"phone_number_id": ""}',  true, 'active', '{"total_messages": 32100,  "delivered": 31500,  "failed": 600}')
+ON CONFLICT DO NOTHING;
+
+-- Integrations seed
+INSERT INTO integrations (id, workspace_id, name, category, provider, description, credentials, status, is_connected) VALUES
+  ('00000000-0000-0000-0000-000000000301', '00000000-0000-0000-0000-000000000001', 'Sendillo', 'messaging', 'sendillo', 'Bulk SMS campaigns via Sendillo', '{}', 'active', false)
 ON CONFLICT DO NOTHING;
 
 COMMIT;
