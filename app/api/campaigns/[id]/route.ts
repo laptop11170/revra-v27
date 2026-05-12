@@ -8,7 +8,7 @@ import { createServiceSupabaseClient } from "@/lib/supabase/server";
 // DELETE /api/campaigns/[id] — delete campaign
 
 async function getCampaignForWorkspace(
-  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  supabase: NonNullable<ReturnType<typeof createServiceSupabaseClient>>,
   campaignId: string,
   workspaceId: string
 ) {

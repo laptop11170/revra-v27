@@ -77,7 +77,7 @@ export async function POST(
   }));
 
   // Send via Sendillo
-  let sendilloResult: { total: number; successful: number; failed: number } | null = null;
+  let sendilloResult: { total: number; successful: number; failed: number; results?: Array<{ clientRef: string; success: boolean; error?: string }> } | null = null;
 
   try {
     sendilloResult = await sendBulkSMS(messages);

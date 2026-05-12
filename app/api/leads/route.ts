@@ -191,7 +191,7 @@ const STAGE_MAP: Record<string, string> = {
 };
 
 async function pushToEmma(
-  supabase: ReturnType<typeof createServiceSupabaseClient>,
+  supabase: NonNullable<ReturnType<typeof createServiceSupabaseClient>>,
   leadId: string,
   lead: Record<string, unknown>
 ): Promise<void> {

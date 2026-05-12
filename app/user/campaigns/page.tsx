@@ -118,12 +118,11 @@ export default function CampaignsPage() {
 
   const fetchPhones = useCallback(async () => {
     try {
-      const res = await fetch("/api/sendillo/numbers");
+      const res = await fetch("/api/sendillo/numbers?type=registered");
       if (!res.ok) return;
       const data = await res.json();
-      // Registered numbers in RevRa
-      const { data: reg } = data as { numbers?: SendilloPhone[] };
-      if (data.registered) setPhones(data.registered);
+      const registered = (data as { numbers?: SendilloPhone[] }).numbers ?? [];
+      setPhones(registered);
     } catch { /* non-critical */ }
   }, []);
 
