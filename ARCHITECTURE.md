@@ -56,24 +56,24 @@
 │     ├── Multi-channel inbox (SMS, WhatsApp, iMessage, etc.)
 │     ├── Unread count badges
 │     └── Lead profile slide-over
+
+> **Note:** `/user/texts` has been merged into `/user/conversations` — redirects to it.
 │
 ├── 🔗 Integrations          app/user/integrations/page.tsx
 │     ├── Per-workspace integration config
 │     ├── Connect platforms (Sendillo, Emma messaging channels)
 │     └── Status monitoring
 │
-├── 👥 Leads                 app/user/leads/page.tsx
-│     ├── Lead list (searchable, sortable)
-│     ├── Add lead modal
-│     ├── Bulk SMS modal → campaign creation + send ✅
-│     ├── Lead profile modal/panel
-│     ├── CSV import wizard
-│     └── Pipeline stage tracking
-│
-├── 📋 Pipeline (Kanban)     app/user/pipeline/page.tsx
+├── 📋 Pipeline (Kanban + List)  app/user/pipeline/page.tsx
 │     ├── Kanban board (drag-and-drop)
+│     ├── Enhanced list view: grouped by pipeline stage
+│     │     ├── Search (name/phone/email)
+│     │     ├── Filters: lead type, source, min score
+│     │     └── Stage section headers with counts
 │     ├── Custom stage columns
 │     └── Lead card → profile slide-over
+
+> **Note:** `/user/leads` has been merged into `/user/pipeline` — redirects to it.
 │
 ├── ⚙️ Settings              app/user/settings/page.tsx
 │     ├── Profile
@@ -86,9 +86,6 @@
 ├── ✅ Tasks                 app/user/tasks/page.tsx
 │     ├── Task list (by agent, by lead)
 │     └── Recurring tasks
-│
-├── 💬 Texts                 app/user/texts/page.tsx
-│     └── SMS compose + send
 │
 ├── 📝 Automations           app/user/automations/page.tsx
 │     └── Workflow canvas (visual builder)
@@ -173,7 +170,7 @@
 │     └── Number registration
 │
 └── ⚙️ Settings             app/superadmin/settings/page.tsx
-      ├── Emma API key setup ✅
+      ├── Emma API key setup ✅  (platform-level env var — Railway)
       ├── Platform config
       └── 🔜 Stripe Connect (RevRa platform payout)
 ```
@@ -464,9 +461,11 @@ calendar_event_status→  confirmed | cancelled
 ║    ├── name, slug, plan                                             ║
 ║    ├── twilio_account_sid, loopmessages_api_key                     ║
 ║    ├── sendgrid_api_key                                             ║
-║    ├── google_calendar_creds (JSONB)                               ║
-║    ├── emma_api_key 🔜                                              ║
+║    ├── google_calendar_creds (JSONB)                                ║
 ║    └── settings (JSONB)                                              ║
+║          │                                                          ║
+║          │ Note: emma_api_key is a platform-level env var           ║
+║          │ (Railway EMMA_API_KEY) — NOT stored in workspaces table  ║
 ║          │                                                          ║
 ║          │ 1:N                                                       ║
 ║          ▼                                                          ║
@@ -657,11 +656,12 @@ sendillo_phone_numbers → SELECT by all / INSERT/UPDATE/DELETE by superadmins
 │ Authentication             │ Clerk            │ ✅ Built        │ CLERK_*    │
 │ Database                   │ Supabase         │ ✅ Built        │ SUPABASE_* │
 │ User Sync Webhook          │ Clerk → Supabase │ ✅ Built        │ CLERK_WH_  │
-│ Emma AI (LunarGrowth)      │ Lunar Olivia     │ ✅ Built        │ EMMA_API_  │
+│ RevRa AI Chat              │ OpenAI/Anthropic │ 🔜 Backend pending │ OPENAI_* │
+│ Emma AI (LunarGrowth)      │ Lunar Olivia     │ ✅ Built (env)  │ EMMA_API_  │
 │ Emma Leads Push            │ Emma             │ ✅ Built        │ EMMA_API_  │
 │ Emma Messaging OAuth       │ Emma → Zernio    │ ✅ Built        │ EMMA_API_  │
 │ Emma Calendar OAuth        │ Emma → Google    │ ✅ Built        │ EMMA_API_  │
-│ Emma Webhooks             │ Emma             │ 🔜 On Hold      │ EMMA_WH_   │
+│ Emma Webhooks             │ Emma             │ ⏸️ On Hold      │ —          │
 │ Emma Campaign Queue       │ Emma             │ ✅ Built        │ EMMA_API_  │
 │ Sendillo Bulk SMS         │ Sendillo         │ ✅ Built        │ SENDILLO_* │
 │ Sendillo Webhooks         │ Sendillo         │ ✅ Built        │ SENDILLO_* │
@@ -682,6 +682,8 @@ sendillo_phone_numbers → SELECT by all / INSERT/UPDATE/DELETE by superadmins
 │ Lead Marketplace          │ Stripe           │ 🔜 Not started  │ —          │
 │ Bulk Upload (Marketplace) │ CSV import       │ 🔜 Not started  │ —          │
 └────────────────────────────┴──────────────────┴────────────────┴────────────┘
+
+> **Emma API Key**: Stored as `EMMA_API_KEY` env var in Railway (platform-level, not per-workspace). All workspaces share the same Emma AI client. `users.emma_client_id` field reserved for future multi-client support.
 ```
 
 ### 5B. Emma AI — Channel Architecture
@@ -1055,7 +1057,57 @@ DEFERRED — LEAD MARKETPLACE (🔜)
 
 ---
 
-## 12. MINDMAP OVERVIEW — Single View
+## 12. GAPS & ACTION ITEMS
+
+### Database Schema Gaps
+
+| Priority | Gap | Fix |
+|----------|-----|-----|
+| 🔴 Critical | `leads.created_by` FK → `users(id)` is missing | Run: `ALTER TABLE leads ADD COLUMN created_by UUID REFERENCES users(id);` |
+| 🔴 Critical | `messages.is_read BOOLEAN DEFAULT FALSE` is missing | Run: `ALTER TABLE messages ADD COLUMN is_read BOOLEAN DEFAULT FALSE;` |
+
+### Missing Pages (Exist but not in nav)
+
+| Priority | Gap | Fix |
+|----------|-----|-----|
+| 🟡 Significant | `/user/calls/active` — active call deep-link | Already built; no nav entry (requires `callId` param) |
+| 🟡 Significant | `/user/marketplace` — Lead Marketplace | Future Phase 4 |
+| 🟡 Significant | `/superadmin/providers` — Providers management | Page exists; nav entry exists |
+
+### Missing API Routes
+
+| Priority | Gap | Fix |
+|----------|-----|-----|
+| 🟡 Significant | `/api/ai/chat` — RevRa AI Chat backend | Future Phase 5 |
+| 🟡 Significant | `/api/notifications/*` — notification APIs | Future phase |
+| 🟡 Significant | `/api/email/*` — email sending APIs | Future (choose SendGrid/Resend) |
+
+### Pages Not Yet Wired
+
+| Priority | Gap | Fix |
+|----------|-----|-----|
+| 🟡 Significant | `/user/calls` — call log list | UI exists; needs Twilio/Emma integration |
+| 🟡 Significant | `/user/calls/active` — active call UI | UI exists; needs Twilio/Emma call control |
+| 🟡 Significant | `/user/calendar` — Google Calendar | UI exists; needs Emma Calendar OAuth |
+| 🟡 Significant | `/user/team` — team management | UI exists; needs full CRUD + invite |
+| 🟡 Significant | `/user/automations` — workflow canvas | UI exists; needs workflow execution engine |
+| 🟡 Significant | `/user/briefing` — agent briefings | UI exists; needs briefing generation logic |
+| 🟡 Significant | `/admin/workflows` — workflow management | Nav added; page needs full implementation |
+| 🟢 Minor | `/user/integrations` — integration config | UI exists; needs per-integration wiring |
+| 🟢 Minor | `/app/error.tsx` and `/app/not-found.tsx` | Missing Next.js error pages |
+
+### On Hold (External Dependencies)
+
+| Status | Item | Blocker |
+|--------|------|---------|
+| ⏸️ On Hold | Emma webhooks | Emma AI team building payload + auth |
+| ⏸️ On Hold | AI draft generation | Emma AI team endpoint not available |
+| ⏸️ On Hold | iMessage/SMS/RCS | Emma AI team hasn't delivered |
+| ⏸️ On Hold | Call recording/transcription/summary fetch | Emma AI team building |
+
+---
+
+## 13. MINDMAP OVERVIEW — Single View
 
 ```
                                     ┌─────────────────────┐
@@ -1092,9 +1144,9 @@ DEFERRED — LEAD MARKETPLACE (🔜)
           ┌─────────────────────────────────────────────────────────────┐
           │                    PRESENTATION LAYER                       │
           │                                                              │
-          │  /user/*         Agent Dashboard (14 pages)                  │
-          │  /admin/*       Admin Dashboard (8 pages)                   │
-          │  /superadmin/*  Superadmin Dashboard (11 pages)             │
+          │  /user/*         Agent Dashboard (14 pages + 1 redirect)         │
+          │  /admin/*       Admin Dashboard (8 pages)                         │
+          │  /superadmin/*  Superadmin Dashboard (11 pages)                  │
           │  /auth/*        Authentication (3 pages)                    │
           │                                                              │
           │  + Shared Components (UI kit + Feature components)            │

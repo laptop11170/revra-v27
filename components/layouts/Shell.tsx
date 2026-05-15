@@ -22,6 +22,9 @@ import {
   Check,
   Bell,
   Search,
+  Calendar as CalendarIcon,
+  CheckSquare,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RevRaAIChat } from "@/components/features/ai/RevRaAIChat";
@@ -43,10 +46,16 @@ interface ShellProps {
 const userNav: NavItem[] = [
   { label: "Home", href: "/", icon: <Home size={17} /> },
   { label: "Conversations", href: "/user/conversations", icon: <MessageSquare size={17} /> },
-  { label: "Leads", href: "/user/pipeline", icon: <Target size={17} /> },
+  { label: "Pipeline", href: "/user/pipeline", icon: <Target size={17} /> },
   { label: "Campaigns", href: "/user/campaigns", icon: <Megaphone size={17} /> },
+  { label: "Calls", href: "/user/calls", icon: <Phone size={17} /> },
+  { label: "Calendar", href: "/user/calendar", icon: <CalendarIcon size={17} /> },
+  { label: "Tasks", href: "/user/tasks", icon: <CheckSquare size={17} /> },
+  { label: "Briefings", href: "/user/briefing", icon: <FileText size={17} /> },
   { label: "Automations", href: "/user/automations", icon: <Workflow size={17} /> },
   { label: "Analytics", href: "/user/analytics", icon: <BarChart3 size={17} /> },
+  { label: "Team", href: "/user/team", icon: <Users size={17} /> },
+  { label: "AI Campaigns", href: "/user/ai", icon: <Sparkles size={17} /> },
   { label: "Integrations", href: "/user/integrations", icon: <Plug size={17} /> },
   { label: "Settings", href: "/user/settings", icon: <Settings size={17} /> },
 ];
@@ -56,6 +65,7 @@ const adminNav: NavItem[] = [
   { label: "Lead Pool", href: "/admin/lead-pool", icon: <Target size={17} /> },
   { label: "Performance", href: "/admin/performance", icon: <BarChart3 size={17} /> },
   { label: "Team", href: "/admin/team", icon: <Users size={17} /> },
+  { label: "Workflows", href: "/admin/workflows", icon: <Workflow size={17} /> },
   { label: "Integrations", href: "/admin/integrations", icon: <Plug size={17} /> },
   { label: "Subscriptions", href: "/admin/subscriptions", icon: <Settings size={17} /> },
   { label: "Settings", href: "/admin/settings", icon: <Settings size={17} /> },

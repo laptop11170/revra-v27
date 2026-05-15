@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Shell } from "@/components/layouts/Shell";
 import { Button } from "@/components/ui/button";
-import { Filter, Plus, Building, ChevronDown, Sparkles, Loader2, LayoutGrid, List, UserCircle, ExternalLink } from "lucide-react";
+import { Filter, Plus, Building, ChevronDown, Sparkles, Loader2, LayoutGrid, List, UserCircle, ExternalLink, Search, X, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLeadProfile, LeadData } from "@/context/lead-profile-context";
 import { AddLeadModal } from "@/components/leads/AddLeadModal";
@@ -287,138 +287,272 @@ function DroppableColumn({
 }
 
 // ── List View ─────────────────────────────────────────────────────────────────
+type FilterState = {
+  search: string;
+  leadType: string;
+  source: string;
+  minScore: number;
+};
+
+const LEAD_TYPE_OPTIONS = ["All Types", "Medicare", "ACA", "Final Expense", "Life", "Other"];
+const SOURCE_OPTIONS = ["All Sources", "Google Ads", "Facebook", "Referral", "Website", "Inbound Call", "Marketplace"];
+
 function ListView({ leads, onOpenLead }: { leads: ApiLead[]; onOpenLead: (lead: ApiLead) => void }) {
+  const [filters, setFilters] = useState<FilterState>({
+    search: "", leadType: "All Types", source: "All Sources", minScore: 0,
+  });
+  const [showFilters, setShowFilters] = useState(false);
+
   const getHotLevel = (score: number): "hot" | "warm" | null => {
     if (score >= 80) return "hot";
     if (score >= 60) return "warm";
     return null;
   };
 
-  const stageLabel: Record<StageKey, string> = {
-    new_lead: "New Lead",
-    contacted: "Contacted",
-    qualified: "Qualified",
-    quote_sent: "Quote Sent",
-    won: "Won",
-    lost: "Lost",
+  const stageMeta: Record<StageKey, { label: string; color: string }> = {
+    new_lead:   { label: "New Leads",   color: "#a078ff" },
+    contacted:  { label: "Contacted",   color: "#00cbe6" },
+    qualified:  { label: "Qualified",   color: "#16a34a" },
+    quote_sent: { label: "Quote Sent",  color: "#d97706" },
+    won:        { label: "Won",          color: "#22c55e" },
+    lost:       { label: "Lost",        color: "#dc2626" },
   };
 
-  const stageDotColor: Record<StageKey, string> = {
-    new_lead: "#a078ff",
-    contacted: "#00cbe6",
-    qualified: "#16a34a",
-    quote_sent: "#d97706",
-    won: "#22c55e",
-    lost: "#dc2626",
+  const filteredLeads = useMemo(() => {
+    return leads.filter((lead) => {
+      if (filters.search) {
+        const q = filters.search.toLowerCase();
+        const fullName = `${lead.first_name} ${lead.last_name || ""}`.toLowerCase();
+        if (!fullName.includes(q) && !lead.phone.includes(q) && !(lead.email || "").toLowerCase().includes(q)) return false;
+      }
+      if (filters.leadType !== "All Types") {
+        const lt = lead.lead_type || "";
+        const match = (filters.leadType === "Medicare" && lt.includes("medicare")) ||
+                     (filters.leadType === "ACA" && lt.includes("aca")) ||
+                     (filters.leadType === "Final Expense" && lt.includes("final")) ||
+                     (filters.leadType === "Life" && lt.includes("life")) ||
+                     (filters.leadType === "Other" && lt !== "medicare" && lt !== "aca" && lt !== "final_expense" && lt !== "life" && lt !== "");
+        if (!match) return false;
+      }
+      if (filters.source !== "All Sources") {
+        const src = (lead.source || "").toLowerCase();
+        const fSrc = filters.source.toLowerCase().replace(/ /g, "_");
+        if (!src.includes(fSrc)) return false;
+      }
+      if (filters.minScore > 0 && lead.score < filters.minScore) return false;
+      return true;
+    });
+  }, [leads, filters]);
+
+  // Group by stage
+  const grouped = stageOrder.reduce<Record<StageKey, ApiLead[]>>((acc, key) => {
+    acc[key] = filteredLeads.filter((l) => l.pipeline_stage === key);
+    return acc;
+  }, {} as Record<StageKey, ApiLead[]>);
+
+  const activeFilterCount = (filters.leadType !== "All Types" ? 1 : 0) +
+    (filters.source !== "All Sources" ? 1 : 0) +
+    (filters.minScore > 0 ? 1 : 0);
+
+  const renderLeadRow = (lead: ApiLead) => {
+    const hot = getHotLevel(lead.score);
+    const fullName = `${lead.first_name} ${lead.last_name || ""}`.trim();
+    const stage = lead.pipeline_stage as StageKey;
+    const meta = stageMeta[stage];
+    const hasActiveFilters = filters.search || filters.leadType !== "All Types" || filters.source !== "All Sources" || filters.minScore > 0;
+
+    return (
+      <div
+        key={lead.id}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "2fr 1.5fr 1fr 1fr 70px 110px",
+          gap: 0,
+          padding: "11px 16px",
+          borderBottom: "1px solid rgba(37,43,63,0.35)",
+          alignItems: "center",
+          cursor: "pointer",
+          transition: "background 0.1s",
+        }}
+        onClick={() => onOpenLead(lead)}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.025)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        {/* Name */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: "var(--radius-sm)",
+            background: hot === "hot" ? "rgba(16,185,129,0.2)" : "var(--surface-3)",
+            color: hot === "hot" ? "var(--mint)" : "var(--ink-mute)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 9.5, fontWeight: 700, flexShrink: 0,
+            fontFamily: "var(--font-mono)",
+          }}>
+            {fullName.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {fullName}
+            </div>
+            {lead.email && (
+              <div style={{ fontSize: 11, color: "var(--ink-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {lead.email}
+              </div>
+            )}
+          </div>
+          {lead.is_admin_lead && <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9, fontWeight: 600, background: "#7c6cff20", color: "#7c6cff", flexShrink: 0 }}>Admin</span>}
+          {lead.is_marketplace_lead && <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9, fontWeight: 600, background: "#06b6d420", color: "#06b6d4", flexShrink: 0 }}>Market</span>}
+        </div>
+
+        {/* Phone */}
+        <div style={{ fontSize: 12, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 12 }}>
+          {lead.phone}
+        </div>
+
+        {/* Lead Type */}
+        <div style={{ fontSize: 12, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {lead.lead_type ? lead.lead_type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—"}
+        </div>
+
+        {/* Source */}
+        <div style={{ fontSize: 12, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {lead.source ? lead.source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—"}
+        </div>
+
+        {/* Score */}
+        <div style={{ fontSize: 12, display: "flex", justifyContent: "center" }}>
+          {lead.score > 0 && (
+            <span style={{
+              padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+              background: hot === "hot" ? "rgba(16,185,129,0.15)" : hot === "warm" ? "rgba(245,158,11,0.15)" : "var(--surface-2)",
+              color: hot === "hot" ? "var(--mint)" : hot === "warm" ? "var(--amber)" : "var(--ink-mute)",
+            }}>
+              {lead.score}
+            </span>
+          )}
+        </div>
+
+        {/* Stage */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 7, height: 7, borderRadius: 999, background: meta.color, display: "inline-block", flexShrink: 0 }} />
+          <span style={{ fontSize: 12, color: "var(--ink)" }}>{meta.label}</span>
+        </div>
+      </div>
+    );
   };
 
   return (
-    <div style={{ borderRadius: "var(--radius-xl)", border: "1px solid var(--line)", overflow: "hidden" }}>
-      {/* Table header */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 80px 1fr 120px", gap: 0, padding: "10px 16px", background: "rgba(19,24,38,0.8)", borderBottom: "1px solid var(--line)" }}>
-        {["Name", "Phone", "Lead Type", "Source", "Score", "Stage", ""].map((h) => (
-          <div key={h} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-faint)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</div>
-        ))}
+    <div>
+      {/* Filter bar */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surface-2)", borderRadius: "var(--radius-md)", padding: "8px 12px", flex: 1, maxWidth: 360 }}>
+          <Search size={13} style={{ color: "var(--ink-mute)", flexShrink: 0 }} />
+          <input
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+            placeholder="Search by name, phone or email..."
+            style={{ background: "none", border: "none", outline: "none", color: "var(--ink)", fontSize: 13, width: "100%" }}
+          />
+          {filters.search && (
+            <button onClick={() => setFilters((f) => ({ ...f, search: "" }))} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-mute)", display: "flex", padding: 0 }}>
+              <X size={12} />
+            </button>
+          )}
+        </div>
+
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "8px 12px",
+            borderRadius: "var(--radius-md)", border: "1px solid var(--line)",
+            background: showFilters || activeFilterCount > 0 ? "var(--accent-glow)" : "var(--surface-2)",
+            color: showFilters || activeFilterCount > 0 ? "var(--accent)" : "var(--ink-mute)",
+            fontSize: 12, fontWeight: 500, cursor: "pointer",
+          }}
+        >
+          <SlidersHorizontal size={12} />
+          Filters
+          {activeFilterCount > 0 && (
+            <span style={{ background: "var(--accent)", color: "#fff", borderRadius: 999, padding: "0 5px", fontSize: 10, fontWeight: 700 }}>
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
+
+        {activeFilterCount > 0 && (
+          <button
+            onClick={() => setFilters({ search: "", leadType: "All Types", source: "All Sources", minScore: 0 })}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-mute)", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}
+          >
+            <X size={12} /> Clear
+          </button>
+        )}
+
+        <span style={{ fontSize: 12, color: "var(--ink-mute)", marginLeft: "auto" }}>
+          {filteredLeads.length} lead{filteredLeads.length !== 1 ? "s" : ""}
+        </span>
       </div>
 
-      {/* Table rows */}
-      {leads.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "var(--ink-mute)", fontSize: 13 }}>
-          No leads yet
+      {/* Filter dropdowns */}
+      {showFilters && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, padding: 12, background: "var(--surface-2)", borderRadius: "var(--radius-md)", border: "1px solid var(--line)" }}>
+          <select
+            value={filters.leadType}
+            onChange={(e) => setFilters((f) => ({ ...f, leadType: e.target.value }))}
+            style={{ background: "var(--surface-3)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", color: "var(--ink)", fontSize: 12, padding: "6px 10px", outline: "none" }}
+          >
+            {LEAD_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select
+            value={filters.source}
+            onChange={(e) => setFilters((f) => ({ ...f, source: e.target.value }))}
+            style={{ background: "var(--surface-3)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", color: "var(--ink)", fontSize: 12, padding: "6px 10px", outline: "none" }}
+          >
+            {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select
+            value={filters.minScore}
+            onChange={(e) => setFilters((f) => ({ ...f, minScore: parseInt(e.target.value) }))}
+            style={{ background: "var(--surface-3)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", color: "var(--ink)", fontSize: 12, padding: "6px 10px", outline: "none" }}
+          >
+            <option value={0}>Any score</option>
+            <option value={60}>Score 60+ (warm)</option>
+            <option value={80}>Score 80+ (hot)</option>
+            <option value={90}>Score 90+</option>
+          </select>
+        </div>
+      )}
+
+      {/* Grouped table by stage */}
+      {filteredLeads.length === 0 ? (
+        <div style={{ padding: "48px", textAlign: "center", color: "var(--ink-mute)", fontSize: 13 }}>
+          {hasActiveFilters ? "No leads match your filters." : "No leads yet."}
         </div>
       ) : (
-        leads.map((lead) => {
-          const hot = getHotLevel(lead.score);
-          const fullName = `${lead.first_name} ${lead.last_name || ""}`.trim();
-          const stage = lead.pipeline_stage as StageKey;
-          const stageColor = stageDotColor[stage] || "#888";
+        stageOrder.map((stage) => {
+          const stageLeads = grouped[stage];
+          if (stageLeads.length === 0) return null;
+          const meta = stageMeta[stage];
 
           return (
-            <div
-              key={lead.id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2fr 1.5fr 1fr 1fr 80px 1fr 120px",
-                gap: 0,
-                padding: "12px 16px",
-                borderBottom: "1px solid rgba(37,43,63,0.4)",
-                alignItems: "center",
-                cursor: "pointer",
-                transition: "background 0.1s",
-              }}
-              onClick={() => onOpenLead(lead)}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              {/* Name */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                <div style={{
-                  width: 30, height: 30, borderRadius: "var(--radius-md)",
-                  background: hot === "hot" ? "rgba(16,185,129,0.2)" : "var(--surface-3)",
-                  color: hot === "hot" ? "var(--mint)" : "var(--ink-mute)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 10, fontWeight: 600, flexShrink: 0,
-                }}>
-                  {fullName.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {fullName}
-                  </div>
-                  {lead.email && (
-                    <div style={{ fontSize: 11, color: "var(--ink-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {lead.email}
-                    </div>
-                  )}
-                </div>
-                {lead.is_admin_lead && <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 600, background: "#7c6cff20", color: "#7c6cff" }}>Admin Lead</span>}
-                {lead.is_marketplace_lead && <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 600, background: "#06b6d420", color: "#06b6d4" }}>Revra Lead</span>}
+            <div key={stage} style={{ marginBottom: 16 }}>
+              {/* Stage section header */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: "rgba(19,24,38,0.5)", borderRadius: "var(--radius-md) var(--radius-md) 0 0", border: "1px solid var(--line)", borderBottom: "none" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: meta.color, display: "inline-block" }} />
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>{meta.label}</span>
+                <span style={{ fontSize: 11, color: "var(--ink-mute)", marginLeft: 4 }}>({stageLeads.length})</span>
               </div>
 
-              {/* Phone */}
-              <div style={{ fontSize: 12.5, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {lead.phone}
+              {/* Table header */}
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 70px 110px", gap: 0, padding: "8px 16px", background: "rgba(19,24,38,0.3)", border: "1px solid var(--line)", borderTop: "none", borderBottom: "1px solid rgba(37,43,63,0.5)" }}>
+                {["Name", "Phone", "Lead Type", "Source", "Score", "Stage"].map((h) => (
+                  <div key={h} style={{ fontSize: 10.5, fontWeight: 600, color: "var(--ink-faint)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</div>
+                ))}
               </div>
 
-              {/* Lead Type */}
-              <div style={{ fontSize: 12.5, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {lead.lead_type ? lead.lead_type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—"}
-              </div>
-
-              {/* Source */}
-              <div style={{ fontSize: 12.5, color: "var(--ink-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {lead.source ? lead.source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—"}
-              </div>
-
-              {/* Score */}
-              <div style={{ fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
-                {lead.score > 0 && (
-                  <span style={{
-                    padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 600,
-                    background: hot === "hot" ? "rgba(16,185,129,0.15)" : hot === "warm" ? "rgba(245,158,11,0.15)" : "var(--surface-2)",
-                    color: hot === "hot" ? "var(--mint)" : hot === "warm" ? "var(--amber)" : "var(--ink-mute)",
-                  }}>
-                    {lead.score}
-                  </span>
-                )}
-              </div>
-
-              {/* Stage */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: 999, background: stageColor, display: "inline-block", flexShrink: 0 }} />
-                <span style={{ fontSize: 12.5, color: "var(--ink)" }}>{stageLabel[stage]}</span>
-              </div>
-
-              {/* View Profile button */}
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  className="btn-ghost"
-                  style={{ padding: "5px 10px", fontSize: 11.5, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}
-                  onClick={(e) => { e.stopPropagation(); onOpenLead(lead); }}
-                >
-                  <UserCircle size={12} />
-                  View Profile
-                </button>
+              {/* Rows */}
+              <div style={{ borderRadius: "0 0 var(--radius-md) var(--radius-md)", overflow: "hidden", border: "1px solid var(--line)", borderTop: "none" }}>
+                {stageLeads.map(renderLeadRow)}
               </div>
             </div>
           );
